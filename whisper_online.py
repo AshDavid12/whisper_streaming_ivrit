@@ -5,10 +5,37 @@ import librosa
 from functools import lru_cache
 import time
 import logging
+import runpod
 
 import io
 import soundfile as sf
 import math
+import os
+from dotenv import load_dotenv
+import openai
+
+load_dotenv('.env')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+# Ensure API key is loaded and set globally
+openai.api_key = OPENAI_API_KEY
+# Set up basic configuration for logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.DEBUG  # Set to DEBUG to capture all levels of log messages
+)
+
+# Use the root logger directly
+log = logging.getLogger(__name__)
+
+
+if not OPENAI_API_KEY:
+    log.error("API key not found. Please set the OPENAI_API_KEY environment variable.")
+    sys.exit(1)
+
+log.debug(f"Using API Key: {OPENAI_API_KEY[:5]}...")
+
+
+from faster_whisper import WhisperModel
 
 logger = logging.getLogger(__name__)
 
@@ -53,119 +80,15 @@ class ASRBase:
         raise NotImplemented("must be implemented in the child class")
 
 
-class WhisperTimestampedASR(ASRBase):
-    """Uses whisper_timestamped library as the backend. Initially, we tested the code on this backend. It worked, but slower than faster-whisper.
-    On the other hand, the installation for GPU could be easier.
-    """
-
-    sep = " "
-
-    def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
-        import whisper
-        import whisper_timestamped
-        from whisper_timestamped import transcribe_timestamped
-        self.transcribe_timestamped = transcribe_timestamped
-        if model_dir is not None:
-            logger.debug("ignoring model_dir, not implemented")
-        return whisper.load_model(modelsize, download_root=cache_dir)
-
-    def transcribe(self, audio, init_prompt=""):
-        result = self.transcribe_timestamped(self.model,
-                audio, language=self.original_language,
-                initial_prompt=init_prompt, verbose=None,
-                condition_on_previous_text=True, **self.transcribe_kargs)
-        return result
- 
-    def ts_words(self,r):
-        # return: transcribe result object to [(beg,end,"word1"), ...]
-        o = []
-        for s in r["segments"]:
-            for w in s["words"]:
-                t = (w["start"],w["end"],w["text"])
-                o.append(t)
-        return o
-
-    def segments_end_ts(self, res):
-        return [s["end"] for s in res["segments"]]
-
-    def use_vad(self):
-        self.transcribe_kargs["vad"] = True
-
-    def set_translate_task(self):
-        self.transcribe_kargs["task"] = "translate"
-
-
-
-
-class FasterWhisperASR(ASRBase):
-    """Uses faster-whisper library as the backend. Works much faster, appx 4-times (in offline mode). For GPU, it requires installation with a specific CUDNN version.
-    """
-
-    sep = ""
-
-    def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
-        from faster_whisper import WhisperModel
-#        logging.getLogger("faster_whisper").setLevel(logger.level)
-        if model_dir is not None:
-            logger.debug(f"Loading whisper model from model_dir {model_dir}. modelsize and cache_dir parameters are not used.")
-            model_size_or_path = model_dir
-        elif modelsize is not None:
-            model_size_or_path = modelsize
-        else:
-            raise ValueError("modelsize or model_dir parameter must be set")
-
-
-        # this worked fast and reliably on NVIDIA L40
-        model = WhisperModel(model_size_or_path, device="cuda", compute_type="float16", download_root=cache_dir)
-
-        # or run on GPU with INT8
-        # tested: the transcripts were different, probably worse than with FP16, and it was slightly (appx 20%) slower
-        #model = WhisperModel(model_size, device="cuda", compute_type="int8_float16")
-
-        # or run on CPU with INT8
-        # tested: works, but slow, appx 10-times than cuda FP16
-#        model = WhisperModel(modelsize, device="cpu", compute_type="int8") #, download_root="faster-disk-cache-dir/")
-        return model
-
-    def transcribe(self, audio, init_prompt=""):
-
-        # tested: beam_size=5 is faster and better than 1 (on one 200 second document from En ESIC, min chunk 0.01)
-        segments, info = self.model.transcribe(audio, language=self.original_language, initial_prompt=init_prompt, beam_size=5, word_timestamps=True, condition_on_previous_text=True, **self.transcribe_kargs)
-        #print(info)  # info contains language detection result
-
-        return list(segments)
-
-    def ts_words(self, segments):
-        o = []
-        for segment in segments:
-            for word in segment.words:
-                if segment.no_speech_prob > 0.9:
-                    continue
-                # not stripping the spaces -- should not be merged with them!
-                w = word.word
-                t = (word.start, word.end, w)
-                o.append(t)
-        return o
-
-    def segments_end_ts(self, res):
-        return [s.end for s in res]
-
-    def use_vad(self):
-        self.transcribe_kargs["vad_filter"] = True
-
-    def set_translate_task(self):
-        self.transcribe_kargs["task"] = "translate"
-
-
 class OpenaiApiASR(ASRBase):
     """Uses OpenAI's Whisper API for audio transcription."""
 
     def __init__(self, lan=None, temperature=0, logfile=sys.stderr):
         self.logfile = logfile
 
-        self.modelname = "whisper-1"  
-        self.original_language = None if lan == "auto" else lan # ISO-639-1 language code
-        self.response_format = "verbose_json" 
+        self.modelname = "whisper-1"
+        self.original_language = None if lan == "auto" else lan  # ISO-639-1 language code
+        self.response_format = "verbose_json"
         self.temperature = temperature
 
         self.load_model()
@@ -177,10 +100,9 @@ class OpenaiApiASR(ASRBase):
 
     def load_model(self, *args, **kwargs):
         from openai import OpenAI
-        self.client = OpenAI()
+        self.client = OpenAI(api_key=OPENAI_API_KEY)
 
         self.transcribed_seconds = 0  # for logging how many seconds were processed by API, to know the cost
-        
 
     def ts_words(self, segments):
         no_speech_segments = []
@@ -200,7 +122,6 @@ class OpenaiApiASR(ASRBase):
             o.append((start, end, word.get("word")))
         return o
 
-
     def segments_end_ts(self, res):
         return [s["end"] for s in res.words]
 
@@ -211,7 +132,7 @@ class OpenaiApiASR(ASRBase):
         sf.write(buffer, audio_data, samplerate=16000, format='WAV', subtype='PCM_16')
         buffer.seek(0)  # Reset buffer's position to the beginning
 
-        self.transcribed_seconds += math.ceil(len(audio_data)/16000)  # it rounds up to the whole seconds
+        self.transcribed_seconds += math.ceil(len(audio_data) / 16000)  # it rounds up to the whole seconds
 
         params = {
             "model": self.modelname,
@@ -241,8 +162,6 @@ class OpenaiApiASR(ASRBase):
 
     def set_translate_task(self):
         self.task = "translate"
-
-
 
 
 class HypothesisBuffer:
@@ -515,132 +434,132 @@ class OnlineASRProcessor:
             e = offset + sents[-1][1]
         return (b,e,t)
 
-class VACOnlineASRProcessor(OnlineASRProcessor):
-    '''Wraps OnlineASRProcessor with VAC (Voice Activity Controller). 
-
-    It works the same way as OnlineASRProcessor: it receives chunks of audio (e.g. 0.04 seconds), 
-    it runs VAD and continuously detects whether there is speech or not. 
-    When it detects end of speech (non-voice for 500ms), it makes OnlineASRProcessor to end the utterance immediately.
-    '''
-
-    def __init__(self, online_chunk_size, *a, **kw):
-        self.online_chunk_size = online_chunk_size
-
-        self.online = OnlineASRProcessor(*a, **kw)
-
-        # VAC:
-        import torch
-        model, _ = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad'
-        )
-        from silero_vad import VADIterator
-        self.vac = VADIterator(model)  # we use all the default options: 500ms silence, etc.  
-
-        self.logfile = self.online.logfile
-        self.init()
-
-    def init(self):
-        self.online.init()
-        self.vac.reset_states()
-        self.current_online_chunk_buffer_size = 0
-
-        self.is_currently_final = False
-
-        self.status = None  # or "voice" or "nonvoice"
-        self.audio_buffer = np.array([],dtype=np.float32)
-        self.buffer_offset = 0  # in frames
-
-    def clear_buffer(self):
-        self.buffer_offset += len(self.audio_buffer)
-        self.audio_buffer = np.array([],dtype=np.float32)
-
-
-    def insert_audio_chunk(self, audio):
-        res = self.vac(audio)
-        self.audio_buffer = np.append(self.audio_buffer, audio)
-
-        if res is not None:
-            frame = list(res.values())[0]
-            if 'start' in res and 'end' not in res:
-                self.status = 'voice'
-                send_audio = self.audio_buffer[frame-self.buffer_offset:]
-                self.online.init(offset=frame/self.SAMPLING_RATE)
-                self.online.insert_audio_chunk(send_audio)
-                self.current_online_chunk_buffer_size += len(send_audio)
-                self.clear_buffer()
-            elif 'end' in res and 'start' not in res:
-                self.status = 'nonvoice'
-                send_audio = self.audio_buffer[:frame-self.buffer_offset]
-                self.online.insert_audio_chunk(send_audio)
-                self.current_online_chunk_buffer_size += len(send_audio)
-                self.is_currently_final = True
-                self.clear_buffer()
-            else:
-                # It doesn't happen in the current code.
-                raise NotImplemented("both start and end of voice in one chunk!!!")
-        else:
-            if self.status == 'voice':
-                self.online.insert_audio_chunk(self.audio_buffer)
-                self.current_online_chunk_buffer_size += len(self.audio_buffer)
-                self.clear_buffer()
-            else:
-                # We keep 1 second because VAD may later find start of voice in it.
-                # But we trim it to prevent OOM. 
-                self.buffer_offset += max(0,len(self.audio_buffer)-self.SAMPLING_RATE)
-                self.audio_buffer = self.audio_buffer[-self.SAMPLING_RATE:]
-
-
-    def process_iter(self):
-        if self.is_currently_final:
-            return self.finish()
-        elif self.current_online_chunk_buffer_size > self.SAMPLING_RATE*self.online_chunk_size:
-            self.current_online_chunk_buffer_size = 0
-            ret = self.online.process_iter()
-            return ret
-        else:
-            print("no online update, only VAD", self.status, file=self.logfile)
-            return (None, None, "")
-
-    def finish(self):
-        ret = self.online.finish()
-        self.current_online_chunk_buffer_size = 0
-        self.is_currently_final = False
-        return ret
-
+# class VACOnlineASRProcessor(OnlineASRProcessor):
+#     '''Wraps OnlineASRProcessor with VAC (Voice Activity Controller).
+#
+#     It works the same way as OnlineASRProcessor: it receives chunks of audio (e.g. 0.04 seconds),
+#     it runs VAD and continuously detects whether there is speech or not.
+#     When it detects end of speech (non-voice for 500ms), it makes OnlineASRProcessor to end the utterance immediately.
+#     '''
+#
+#     def __init__(self, online_chunk_size, *a, **kw):
+#         self.online_chunk_size = online_chunk_size
+#
+#         self.online = OnlineASRProcessor(*a, **kw)
+#
+#         # VAC:
+#         import torch
+#         model, _ = torch.hub.load(
+#             repo_or_dir='snakers4/silero-vad',
+#             model='silero_vad'
+#         )
+#         from silero_vad import VADIterator
+#         self.vac = VADIterator(model)  # we use all the default options: 500ms silence, etc.
+#
+#         self.logfile = self.online.logfile
+#         self.init()
+#
+#     def init(self):
+#         self.online.init()
+#         self.vac.reset_states()
+#         self.current_online_chunk_buffer_size = 0
+#
+#         self.is_currently_final = False
+#
+#         self.status = None  # or "voice" or "nonvoice"
+#         self.audio_buffer = np.array([],dtype=np.float32)
+#         self.buffer_offset = 0  # in frames
+#
+#     def clear_buffer(self):
+#         self.buffer_offset += len(self.audio_buffer)
+#         self.audio_buffer = np.array([],dtype=np.float32)
+#
+#
+#     def insert_audio_chunk(self, audio):
+#         res = self.vac(audio)
+#         self.audio_buffer = np.append(self.audio_buffer, audio)
+#
+#         if res is not None:
+#             frame = list(res.values())[0]
+#             if 'start' in res and 'end' not in res:
+#                 self.status = 'voice'
+#                 send_audio = self.audio_buffer[frame-self.buffer_offset:]
+#                 self.online.init(offset=frame/self.SAMPLING_RATE)
+#                 self.online.insert_audio_chunk(send_audio)
+#                 self.current_online_chunk_buffer_size += len(send_audio)
+#                 self.clear_buffer()
+#             elif 'end' in res and 'start' not in res:
+#                 self.status = 'nonvoice'
+#                 send_audio = self.audio_buffer[:frame-self.buffer_offset]
+#                 self.online.insert_audio_chunk(send_audio)
+#                 self.current_online_chunk_buffer_size += len(send_audio)
+#                 self.is_currently_final = True
+#                 self.clear_buffer()
+#             else:
+#                 # It doesn't happen in the current code.
+#                 raise NotImplemented("both start and end of voice in one chunk!!!")
+#         else:
+#             if self.status == 'voice':
+#                 self.online.insert_audio_chunk(self.audio_buffer)
+#                 self.current_online_chunk_buffer_size += len(self.audio_buffer)
+#                 self.clear_buffer()
+#             else:
+#                 # We keep 1 second because VAD may later find start of voice in it.
+#                 # But we trim it to prevent OOM.
+#                 self.buffer_offset += max(0,len(self.audio_buffer)-self.SAMPLING_RATE)
+#                 self.audio_buffer = self.audio_buffer[-self.SAMPLING_RATE:]
+#
+#
+#     def process_iter(self):
+#         if self.is_currently_final:
+#             return self.finish()
+#         elif self.current_online_chunk_buffer_size > self.SAMPLING_RATE*self.online_chunk_size:
+#             self.current_online_chunk_buffer_size = 0
+#             ret = self.online.process_iter()
+#             return ret
+#         else:
+#             print("no online update, only VAD", self.status, file=self.logfile)
+#             return (None, None, "")
+#
+#     def finish(self):
+#         ret = self.online.finish()
+#         self.current_online_chunk_buffer_size = 0
+#         self.is_currently_final = False
+#         return ret
+#
 
 
 WHISPER_LANG_CODES = "af,am,ar,as,az,ba,be,bg,bn,bo,br,bs,ca,cs,cy,da,de,el,en,es,et,eu,fa,fi,fo,fr,gl,gu,ha,haw,he,hi,hr,ht,hu,hy,id,is,it,ja,jw,ka,kk,km,kn,ko,la,lb,ln,lo,lt,lv,mg,mi,mk,ml,mn,mr,ms,mt,my,ne,nl,nn,no,oc,pa,pl,ps,pt,ro,ru,sa,sd,si,sk,sl,sn,so,sq,sr,su,sv,sw,ta,te,tg,th,tk,tl,tr,tt,uk,ur,uz,vi,yi,yo,zh".split(",")
 
-def create_tokenizer(lan):
-    """returns an object that has split function that works like the one of MosesTokenizer"""
-
-    assert lan in WHISPER_LANG_CODES, "language must be Whisper's supported lang code: " + " ".join(WHISPER_LANG_CODES)
-
-    if lan == "uk":
-        import tokenize_uk
-        class UkrainianTokenizer:
-            def split(self, text):
-                return tokenize_uk.tokenize_sents(text)
-        return UkrainianTokenizer()
-
-    # supported by fast-mosestokenizer
-    if lan in "as bn ca cs de el en es et fi fr ga gu hi hu is it kn lt lv ml mni mr nl or pa pl pt ro ru sk sl sv ta te yue zh".split():
-        from mosestokenizer import MosesTokenizer
-        return MosesTokenizer(lan)
-
-    # the following languages are in Whisper, but not in wtpsplit:
-    if lan in "as ba bo br bs fo haw hr ht jw lb ln lo mi nn oc sa sd sn so su sw tk tl tt".split():
-        logger.debug(f"{lan} code is not supported by wtpsplit. Going to use None lang_code option.")
-        lan = None
-
-    from wtpsplit import WtP
-    # downloads the model from huggingface on the first use
-    wtp = WtP("wtp-canine-s-12l-no-adapters")
-    class WtPtok:
-        def split(self, sent):
-            return wtp.split(sent, lang_code=lan)
-    return WtPtok()
+# def create_tokenizer(lan):
+#     """returns an object that has split function that works like the one of MosesTokenizer"""
+#
+#     assert lan in WHISPER_LANG_CODES, "language must be Whisper's supported lang code: " + " ".join(WHISPER_LANG_CODES)
+#
+#     if lan == "uk":
+#         import tokenize_uk
+#         class UkrainianTokenizer:
+#             def split(self, text):
+#                 return tokenize_uk.tokenize_sents(text)
+#         return UkrainianTokenizer()
+#
+#     # supported by fast-mosestokenizer
+#     if lan in "as bn ca cs de el en es et fi fr ga gu hi hu is it kn lt lv ml mni mr nl or pa pl pt ro ru sk sl sv ta te yue zh".split():
+#         from mosestokenizer import MosesTokenizer
+#         return MosesTokenizer(lan)
+#
+#     # the following languages are in Whisper, but not in wtpsplit:
+#     if lan in "as ba bo br bs fo haw hr ht jw lb ln lo mi nn oc sa sd sn so su sw tk tl tt".split():
+#         logger.debug(f"{lan} code is not supported by wtpsplit. Going to use None lang_code option.")
+#         lan = None
+#
+#     from wtpsplit import WtP
+#     # downloads the model from huggingface on the first use
+#     wtp = WtP("wtp-canine-s-12l-no-adapters")
+#     class WtPtok:
+#         def split(self, sent):
+#             return wtp.split(sent, lang_code=lan)
+#     return WtPtok()
 
 
 def add_shared_args(parser):
@@ -666,22 +585,22 @@ def asr_factory(args, logfile=sys.stderr):
     Creates and configures an ASR and ASR Online instance based on the specified backend and arguments.
     """
     backend = args.backend
-    if backend == "openai-api":
-        logger.debug("Using OpenAI API.")
-        asr = OpenaiApiASR(lan=args.lan)
-    else:
-        if backend == "faster-whisper":
-            asr_cls = FasterWhisperASR
-        else:
-            asr_cls = WhisperTimestampedASR
+    #if backend == "openai-api":
+    logger.debug("Using OpenAI API.")
+    asr = OpenaiApiASR(lan=args.lan)
+    # else:
+    #     if backend == "faster-whisper":
+    #         asr_cls = FasterWhisperASR
+    #     else:
+    #         asr_cls = WhisperTimestampedASR
 
         # Only for FasterWhisperASR and WhisperTimestampedASR
-        size = args.model
-        t = time.time()
-        logger.info(f"Loading Whisper {size} model for {args.lan}...")
-        asr = asr_cls(modelsize=size, lan=args.lan, cache_dir=args.model_cache_dir, model_dir=args.model_dir)
-        e = time.time()
-        logger.info(f"done. It took {round(e-t,2)} seconds.")
+        # size = args.model
+        # t = time.time()
+        # logger.info(f"Loading Whisper {size} model for {args.lan}...")
+        # asr = asr_cls(modelsize=size, lan=args.lan, cache_dir=args.model_cache_dir, model_dir=args.model_dir)
+        # e = time.time()
+        # logger.info(f"done. It took {round(e-t,2)} seconds.")
 
     # Apply common configurations
     if getattr(args, 'vad', False):  # Checks if VAD argument is present and True
@@ -695,20 +614,20 @@ def asr_factory(args, logfile=sys.stderr):
     else:
         tgt_language = language  # Whisper transcribes in this language
 
-    # Create the tokenizer
-    if args.buffer_trimming == "sentence":
-        tokenizer = create_tokenizer(tgt_language)
-    else:
-        tokenizer = None
+    # # Create the tokenizer
+    # if args.buffer_trimming == "sentence":
+    #     tokenizer = create_tokenizer(tgt_language)
+    # else:
+    tokenizer = None
 
     # Create the OnlineASRProcessor
-    if args.vac:
-        
-        online = VACOnlineASRProcessor(args.min_chunk_size, asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
-    else:
-        online = OnlineASRProcessor(asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
+    # if args.vac:
+    #
+    #     online = VACOnlineASRProcessor(args.min_chunk_size, asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
+    # else:
+    online = OnlineASRProcessor(asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
 
-    return asr, online
+    return asr,online
 
 def set_logging(args,logger,other="_server"):
     logging.basicConfig(#format='%(name)s 
@@ -750,7 +669,7 @@ if __name__ == "__main__":
     duration = len(load_audio(audio_path))/SAMPLING_RATE
     logger.info("Audio duration is: %2.2f seconds" % duration)
 
-    asr, online = asr_factory(args, logfile=logfile)
+    asr,online = asr_factory(args, logfile=logfile)
     if args.vac:
         min_chunk = args.vac_chunk_size
     else:
@@ -791,7 +710,7 @@ if __name__ == "__main__":
         else:
             output_transcript(o)
         now = None
-    elif args.comp_unaware:  # computational unaware mode 
+    elif args.comp_unaware:  # computational unaware mode
         end = beg + min_chunk
         while True:
             a = load_audio_chunk(audio_path,beg,end)
@@ -808,9 +727,9 @@ if __name__ == "__main__":
 
             if end >= duration:
                 break
-            
+
             beg = end
-            
+
             if end + min_chunk > duration:
                 end = duration
             else:
