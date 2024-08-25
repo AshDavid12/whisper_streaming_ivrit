@@ -18,12 +18,8 @@ load_dotenv('.env')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 RUN_POD_API_KEY = os.getenv('RUN_POD_API_KEY')
 RUNPOD_ENDPOINT_ID =os.getenv('RUNPOD_ENDPOINT_ID')
-# Ensure API key is loaded and set globally
 openai.api_key = OPENAI_API_KEY
-# runpod.api_key = RUN_POD_API_KEY
-# runpod.Endpoint = RUNPOD_ENDPOINT_ID
-#run_pod. = 'KLCUOLPEKBZPE1H60OR060V23FZ614HOY6VEEAB2'
-#endpoint_id = runpod.Endpoint("si8wxwmxjhjbqz")
+
 # Set up basic configuration for logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -86,8 +82,8 @@ class ASRBase:
         raise NotImplemented("must be implemented in the child class")
 
 
-class OpenaiApiASR(ASRBase):
-    """Uses OpenAI's Whisper API for audio transcription."""
+class IvritOnRunPodASR(ASRBase):
+    """Uses ivrit-ai API for audio transcription."""
     def __init__(self, lan=None, api_key=None, endpoint_id=None, logfile=sys.stderr):
         self.logfile = logfile
         self.original_language = None if lan == "auto" else lan  # ISO-639-1 language code
@@ -445,21 +441,9 @@ def asr_factory(args, logfile=sys.stderr):
     """
     backend = args.backend
     #if backend == "openai-api":
-    logger.debug("Using OpenAI API.")
-    asr = OpenaiApiASR(lan=args.lan,api_key=RUN_POD_API_KEY,endpoint_id=RUNPOD_ENDPOINT_ID)
-    # else:
-    #     if backend == "faster-whisper":
-    #         asr_cls = FasterWhisperASR
-    #     else:
-    #         asr_cls = WhisperTimestampedASR
+    logger.debug("Using ivrit-ai.")
+    asr = IvritOnRunPodASR(lan=args.lan,api_key=RUN_POD_API_KEY,endpoint_id=RUNPOD_ENDPOINT_ID)
 
-        # Only for FasterWhisperASR and WhisperTimestampedASR
-        # size = args.model
-        # t = time.time()
-        # logger.info(f"Loading Whisper {size} model for {args.lan}...")
-        # asr = asr_cls(modelsize=size, lan=args.lan, cache_dir=args.model_cache_dir, model_dir=args.model_dir)
-        # e = time.time()
-        # logger.info(f"done. It took {round(e-t,2)} seconds.")
 
     # Apply common configurations
     if getattr(args, 'vad', False):  # Checks if VAD argument is present and True
