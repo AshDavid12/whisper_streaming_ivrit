@@ -6,7 +6,7 @@ from functools import lru_cache
 import time
 import logging
 import runpod
-
+import base64
 import io
 import soundfile as sf
 import math
@@ -16,8 +16,14 @@ import openai
 
 load_dotenv('.env')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+RUN_POD_API_KEY = os.getenv('RUN_POD_API_KEY')
+RUNPOD_ENDPOINT_ID =os.getenv('RUNPOD_ENDPOINT_ID')
 # Ensure API key is loaded and set globally
 openai.api_key = OPENAI_API_KEY
+runpod.api_key = RUN_POD_API_KEY
+runpod.Endpoint = RUNPOD_ENDPOINT_ID
+#run_pod. = 'KLCUOLPEKBZPE1H60OR060V23FZ614HOY6VEEAB2'
+#endpoint_id = runpod.Endpoint("si8wxwmxjhjbqz")
 # Set up basic configuration for logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -82,80 +88,128 @@ class ASRBase:
 
 class OpenaiApiASR(ASRBase):
     """Uses OpenAI's Whisper API for audio transcription."""
-
-    def __init__(self, lan=None, temperature=0, logfile=sys.stderr):
+    def __init__(self, lan=None, api_key=None, endpoint_id=None, logfile=sys.stderr):
         self.logfile = logfile
-
-        self.modelname = "whisper-1"
         self.original_language = None if lan == "auto" else lan  # ISO-639-1 language code
-        self.response_format = "verbose_json"
-        self.temperature = temperature
-
-        self.load_model()
-
-        self.use_vad_opt = False
-
-        # reset the task in set_translate_task
-        self.task = "transcribe"
-
-    def load_model(self, *args, **kwargs):
-        from openai import OpenAI
-        self.client = OpenAI(api_key=OPENAI_API_KEY)
-
-        self.transcribed_seconds = 0  # for logging how many seconds were processed by API, to know the cost
-
+        if api_key is None or endpoint_id is None:
+            raise ValueError("API key and Endpoint ID must be provided for Runpod API")
+        runpod.api_key = api_key
+        #runpod.api_key = 'KLCUOLPEKBZPE1H60OR060V23FZ614HOY6VEEAB2'
+        self.endpoint = runpod.Endpoint(endpoint_id)
+        self.transcribed_seconds = 0  # For logging how many seconds were processed by API, to know the cost
     def ts_words(self, segments):
         no_speech_segments = []
         if self.use_vad_opt:
-            for segment in segments.segments:
-                # TODO: threshold can be set from outside
+            for segment in segments:
                 if segment["no_speech_prob"] > 0.8:
                     no_speech_segments.append((segment.get("start"), segment.get("end")))
-
         o = []
         for word in segments.words:
             start = word.get("start")
             end = word.get("end")
             if any(s[0] <= start <= s[1] for s in no_speech_segments):
-                # print("Skipping word", word.get("word"), "because it's in a no-speech segment")
                 continue
             o.append((start, end, word.get("word")))
         return o
-
     def segments_end_ts(self, res):
         return [s["end"] for s in res.words]
-
     def transcribe(self, audio_data, prompt=None, *args, **kwargs):
         # Write the audio data to a buffer
         buffer = io.BytesIO()
         buffer.name = "temp.wav"
         sf.write(buffer, audio_data, samplerate=16000, format='WAV', subtype='PCM_16')
         buffer.seek(0)  # Reset buffer's position to the beginning
-
-        self.transcribed_seconds += math.ceil(len(audio_data) / 16000)  # it rounds up to the whole seconds
-
-        params = {
-            "model": self.modelname,
-            "file": buffer,
-            "response_format": self.response_format,
-            "temperature": self.temperature,
-            "timestamp_granularities": ["word", "segment"]
+        self.transcribed_seconds += math.ceil(len(audio_data)/16000)  # it rounds up to the whole seconds
+        # Convert the audio to base64
+        audio_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+        payload = {
+            'type': 'blob',
+            'data': audio_base64
         }
-        if self.task != "translate" and self.original_language:
-            params["language"] = self.original_language
-        if prompt:
-            params["prompt"] = prompt
+        try:
+            # Send the request to Runpod API
+            res = self.endpoint.run_sync(payload)
+        except Exception as e:
+            logger.error(f"Failed to transcribe audio with Runpod API: {e}")
+            return None
+        segments = res.get('result', {}).get('segments', [])
+        return segments
 
-        if self.task == "translate":
-            proc = self.client.audio.translations
-        else:
-            proc = self.client.audio.transcriptions
 
-        # Process transcription/translation
-        transcript = proc.create(**params)
-        logger.debug(f"OpenAI API processed accumulated {self.transcribed_seconds} seconds")
 
-        return transcript
+    # def __init__(self, lan=None, temperature=0, logfile=sys.stderr):
+    #     self.logfile = logfile
+    #
+    #     self.modelname = "whisper-1"
+    #     self.original_language = None if lan == "auto" else lan  # ISO-639-1 language code
+    #     self.response_format = "verbose_json"
+    #     self.temperature = temperature
+    #
+    #     self.load_model()
+    #
+    #     self.use_vad_opt = False
+    #
+    #     # reset the task in set_translate_task
+    #     self.task = "transcribe"
+    #
+    # def load_model(self, *args, **kwargs):
+    #     from openai import OpenAI
+    #     self.client = OpenAI(api_key=OPENAI_API_KEY)
+    #
+    #     self.transcribed_seconds = 0  # for logging how many seconds were processed by API, to know the cost
+    #
+    # def ts_words(self, segments):
+    #     no_speech_segments = []
+    #     if self.use_vad_opt:
+    #         for segment in segments.segments:
+    #             # TODO: threshold can be set from outside
+    #             if segment["no_speech_prob"] > 0.8:
+    #                 no_speech_segments.append((segment.get("start"), segment.get("end")))
+    #
+    #     o = []
+    #     for word in segments.words:
+    #         start = word.get("start")
+    #         end = word.get("end")
+    #         if any(s[0] <= start <= s[1] for s in no_speech_segments):
+    #             # print("Skipping word", word.get("word"), "because it's in a no-speech segment")
+    #             continue
+    #         o.append((start, end, word.get("word")))
+    #     return o
+    #
+    # def segments_end_ts(self, res):
+    #     return [s["end"] for s in res.words]
+    #
+    # def transcribe(self, audio_data, prompt=None, *args, **kwargs):
+    #     # Write the audio data to a buffer
+    #     buffer = io.BytesIO()
+    #     buffer.name = "temp.wav"
+    #     sf.write(buffer, audio_data, samplerate=16000, format='WAV', subtype='PCM_16')
+    #     buffer.seek(0)  # Reset buffer's position to the beginning
+    #
+    #     self.transcribed_seconds += math.ceil(len(audio_data) / 16000)  # it rounds up to the whole seconds
+    #
+    #     params = {
+    #         "model": self.modelname,
+    #         "file": buffer,
+    #         "response_format": self.response_format,
+    #         "temperature": self.temperature,
+    #         "timestamp_granularities": ["word", "segment"]
+    #     }
+    #     if self.task != "translate" and self.original_language:
+    #         params["language"] = self.original_language
+    #     if prompt:
+    #         params["prompt"] = prompt
+    #
+    #     if self.task == "translate":
+    #         proc = self.client.audio.translations
+    #     else:
+    #         proc = self.client.audio.transcriptions
+    #
+    #     # Process transcription/translation
+    #     transcript = proc.create(**params)
+    #     logger.debug(f"OpenAI API processed accumulated {self.transcribed_seconds} seconds")
+    #
+    #     return transcript
 
     def use_vad(self):
         self.use_vad_opt = True
