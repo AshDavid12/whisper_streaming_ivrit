@@ -7,29 +7,6 @@ Demonstration paper, by [Dominik Macháček](https://ufal.mff.cuni.cz/dominik-ma
 
 Abstract:    Whisper is one of the recent state-of-the-art multilingual speech recognition and translation models, however, it is not designed for real-time transcription. In this paper, we build on top of Whisper and create Whisper-Streaming, an implementation of real-time speech transcription and translation of Whisper-like models. Whisper-Streaming uses local agreement policy with self-adaptive latency to enable streaming transcription. We show that Whisper-Streaming achieves high quality and 3.3 seconds latency on unsegmented long-form speech transcription test set, and we demonstrate its robustness and practical usability as a component in live transcription service at a multilingual conference. 
 
-
-[Paper PDF](https://aclanthology.org/2023.ijcnlp-demo.3.pdf), [Demo video](https://player.vimeo.com/video/840442741)
-
-[Slides](http://ufallab.ms.mff.cuni.cz/~machacek/pre-prints/AACL23-2.11.2023-Turning-Whisper-oral.pdf) -- 15 minutes oral presentation at IJCNLP-AACL 2023
-
-Please, cite us. [ACL Anthology](https://aclanthology.org/2023.ijcnlp-demo.3/), [Bibtex citation](https://aclanthology.org/2023.ijcnlp-demo.3.bib):
-
-```
-@inproceedings{machacek-etal-2023-turning,
-    title = "Turning Whisper into Real-Time Transcription System",
-    author = "Mach{\'a}{\v{c}}ek, Dominik  and
-      Dabre, Raj  and
-      Bojar, Ond{\v{r}}ej",
-    editor = "Saha, Sriparna  and
-      Sujaini, Herry",
-    booktitle = "Proceedings of the 13th International Joint Conference on Natural Language Processing and the 3rd Conference of the Asia-Pacific Chapter of the Association for Computational Linguistics: System Demonstrations",
-    month = nov,
-    year = "2023",
-    address = "Bali, Indonesia",
-    publisher = "Association for Computational Linguistics",
-    url = "https://aclanthology.org/2023.ijcnlp-demo.3",
-    pages = "17--24",
-}
 ```
 
 ## Installation
@@ -209,55 +186,4 @@ arecord -f S16_LE -c1 -r 16000 -t raw -D default | nc localhost 43001
 - nc is netcat with server's host and port
 
 
-## Background
-
-Default Whisper is intended for audio chunks of at most 30 seconds that contain
-one full sentence. Longer audio files must be split to shorter chunks and
-merged with "init prompt". In low latency simultaneous streaming mode, the
-simple and naive chunking fixed-sized windows does not work well, it can split
-a word in the middle. It is also necessary to know when the transcribt is
-stable, should be confirmed ("commited") and followed up, and when the future
-content makes the transcript clearer. 
-
-For that, there is LocalAgreement-n policy: if n consecutive updates, each with
-a newly available audio stream chunk, agree on a prefix transcript, it is
-confirmed. (Reference: CUNI-KIT at IWSLT 2022 etc.)
-
-In this project, we re-use the idea of Peter Polák from this demo:
-https://github.com/pe-trik/transformers/blob/online_decode/examples/pytorch/online-decoding/whisper-online-demo.py
-However, it doesn't do any sentence segmentation, but Whisper produces
-punctuation and the libraries `faster-whisper` and `whisper_transcribed` make
-word-level timestamps. In short: we
-consecutively process new audio chunks, emit the transcripts that are confirmed
-by 2 iterations, and scroll the audio processing buffer on a timestamp of a
-confirmed complete sentence. The processing audio buffer is not too long and
-the processing is fast.
-
-In more detail: we use the init prompt, we handle the inaccurate timestamps, we
-re-process confirmed sentence prefixes and skip them, making sure they don't
-overlap, and we limit the processing buffer window. 
-
-### Performance evaluation
-
-[See the paper.](http://www.afnlp.org/conferences/ijcnlp2023/proceedings/main-demo/cdrom/pdf/2023.ijcnlp-demo.3.pdf)
-
-### Contributions
-
-Contributions are welcome. We acknowledge especially:
-
-- [The GitHub contributors](https://github.com/ufal/whisper_streaming/graphs/contributors) for their pull requests with new features and bugfixes.
-- [Nice explanation video](https://www.youtube.com/watch?v=_spinzpEeFM) -- published on 31st March 2024, note that newer updates are not included.
-- [The translation of this repo into Chinese.](https://github.com/Gloridust/whisper_streaming_CN)
-- [Ondřej Plátek](https://opla.cz/) for the paper pre-review.
-
-Credits:
-
-- [Peter Polák](https://ufal.mff.cuni.cz/peter-polak) for the original idea.
-- The UEDIN team of the [ELITR project](https://elitr.eu) for the original line_packet.py.
-- Silero Team for their VAD [model](https://github.com/snakers4/silero-vad) and [VADIterator](https://github.com/ufal/whisper_streaming/blob/47caa80588ee9c0fa8945a5d05f0aea6315eb837/silero_vad.py#L8).
-
-
-## Contact
-
-Dominik Macháček, machacek@ufal.mff.cuni.cz
 
