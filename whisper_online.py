@@ -129,12 +129,14 @@ class IvritOnRunPodASR(ASRBase):
         try:
             # Send the request to Runpod API
             res = self.endpoint.run_sync(payload)
-            res['result']
-            logger.debug(f"Transcription response: {res}")  # Debugging line
+            #res['result']
+            #logger.debug(f"Transcription response: {res}")  # Debugging line ##THIS CAUSES TO OUTPUT THE JUNK
         except Exception as e:
             logger.error(f"Failed to transcribe audio with Runpod API: {e}")
             return None
         segments = res.get('result', {}).get('segments', [])
+
+
         return segments
 
     def use_vad(self):
