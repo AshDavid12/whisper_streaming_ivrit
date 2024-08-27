@@ -13,6 +13,7 @@ import math
 import os
 from dotenv import load_dotenv
 import openai
+from voice_activity_controller import *
 
 load_dotenv('.env')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -429,99 +430,54 @@ class OnlineASRProcessor:
         return (b, e, t)
 
 
-# class VACOnlineASRProcessor(OnlineASRProcessor):
-#     '''Wraps OnlineASRProcessor with VAC (Voice Activity Controller).
-#
-#     It works the same way as OnlineASRProcessor: it receives chunks of audio (e.g. 0.04 seconds),
-#     it runs VAD and continuously detects whether there is speech or not.
-#     When it detects end of speech (non-voice for 500ms), it makes OnlineASRProcessor to end the utterance immediately.
-#     '''
-#
-#     def __init__(self, online_chunk_size, *a, **kw):
-#         self.online_chunk_size = online_chunk_size
-#
-#         self.online = OnlineASRProcessor(*a, **kw)
-#
-#         # VAC:
-#         import torch
-#         model, _ = torch.hub.load(
-#             repo_or_dir='snakers4/silero-vad',
-#             model='silero_vad'
-#         )
-#         from silero_vad import VADIterator
-#         self.vac = VADIterator(model)  # we use all the default options: 500ms silence, etc.
-#
-#         self.logfile = self.online.logfile
-#         self.init()
-#
-#     def init(self):
-#         self.online.init()
-#         self.vac.reset_states()
-#         self.current_online_chunk_buffer_size = 0
-#
-#         self.is_currently_final = False
-#
-#         self.status = None  # or "voice" or "nonvoice"
-#         self.audio_buffer = np.array([],dtype=np.float32)
-#         self.buffer_offset = 0  # in frames
-#
-#     def clear_buffer(self):
-#         self.buffer_offset += len(self.audio_buffer)
-#         self.audio_buffer = np.array([],dtype=np.float32)
-#
-#
-#     def insert_audio_chunk(self, audio):
-#         res = self.vac(audio)
-#         self.audio_buffer = np.append(self.audio_buffer, audio)
-#
-#         if res is not None:
-#             frame = list(res.values())[0]
-#             if 'start' in res and 'end' not in res:
-#                 self.status = 'voice'
-#                 send_audio = self.audio_buffer[frame-self.buffer_offset:]
-#                 self.online.init(offset=frame/self.SAMPLING_RATE)
-#                 self.online.insert_audio_chunk(send_audio)
-#                 self.current_online_chunk_buffer_size += len(send_audio)
-#                 self.clear_buffer()
-#             elif 'end' in res and 'start' not in res:
-#                 self.status = 'nonvoice'
-#                 send_audio = self.audio_buffer[:frame-self.buffer_offset]
-#                 self.online.insert_audio_chunk(send_audio)
-#                 self.current_online_chunk_buffer_size += len(send_audio)
-#                 self.is_currently_final = True
-#                 self.clear_buffer()
-#             else:
-#                 # It doesn't happen in the current code.
-#                 raise NotImplemented("both start and end of voice in one chunk!!!")
-#         else:
-#             if self.status == 'voice':
-#                 self.online.insert_audio_chunk(self.audio_buffer)
-#                 self.current_online_chunk_buffer_size += len(self.audio_buffer)
-#                 self.clear_buffer()
-#             else:
-#                 # We keep 1 second because VAD may later find start of voice in it.
-#                 # But we trim it to prevent OOM.
-#                 self.buffer_offset += max(0,len(self.audio_buffer)-self.SAMPLING_RATE)
-#                 self.audio_buffer = self.audio_buffer[-self.SAMPLING_RATE:]
-#
-#
-#     def process_iter(self):
-#         if self.is_currently_final:
-#             return self.finish()
-#         elif self.current_online_chunk_buffer_size > self.SAMPLING_RATE*self.online_chunk_size:
-#             self.current_online_chunk_buffer_size = 0
-#             ret = self.online.process_iter()
-#             return ret
-#         else:
-#             print("no online update, only VAD", self.status, file=self.logfile)
-#             return (None, None, "")
-#
-#     def finish(self):
-#         ret = self.online.finish()
-#         self.current_online_chunk_buffer_size = 0
-#         self.is_currently_final = False
-#         return ret
-#
+class VACOnlineASRProcessor(OnlineASRProcessor):
+    def __init__(self, online_chunk_size, *a, **kw):
+        self.online_chunk_size = online_chunk_size
+
+        self.online = OnlineASRProcessor(*a, **kw)
+        self.vac = VoiceActivityController(use_vad_result=False)
+
+        self.logfile = self.online.logfile
+
+        self.init()
+
+    def init(self):
+        self.online.init()
+        self.vac.reset_states()
+        self.current_online_chunk_buffer_size = 0
+        self.is_currently_final = False
+
+    def insert_audio_chunk(self, audio):
+        r = self.vac.detect_speech_iter(audio, audio_in_int16=False)
+        audio, is_final = r
+        print(is_final)
+        self.is_currently_final = is_final
+        self.online.insert_audio_chunk(audio)
+        self.current_online_chunk_buffer_size += len(audio)
+
+    def process_iter(self):
+        if self.is_currently_final:
+            return self.finish()
+        elif self.current_online_chunk_buffer_size > SAMPLING_RATE * self.online_chunk_size:
+            self.current_online_chunk_buffer_size = 0
+            ret = self.online.process_iter()
+            return ret
+        else:
+            print("no online update, only VAD", file=self.logfile)
+            return (None, None, "")
+
+    def finish(self):
+        ret = self.online.finish()
+        self.online.init(keep_offset=True)
+        self.current_online_chunk_buffer_size = 0
+        return ret
+    '''Wraps OnlineASRProcessor with VAC (Voice Activity Controller).
+
+    It works the same way as OnlineASRProcessor: it receives chunks of audio (e.g. 0.04 seconds),
+    it runs VAD and continuously detects whether there is speech or not.
+    When it detects end of speech (non-voice for 500ms), it makes OnlineASRProcessor to end the utterance immediately.
+    '''
+
 
 
 WHISPER_LANG_CODES = "af,am,ar,as,az,ba,be,bg,bn,bo,br,bs,ca,cs,cy,da,de,el,en,es,et,eu,fa,fi,fo,fr,gl,gu,ha,haw,he,hi,hr,ht,hu,hy,id,is,it,ja,jw,ka,kk,km,kn,ko,la,lb,ln,lo,lt,lv,mg,mi,mk,ml,mn,mr,ms,mt,my,ne,nl,nn,no,oc,pa,pl,ps,pt,ro,ru,sa,sd,si,sk,sl,sn,so,sq,sr,su,sv,sw,ta,te,tg,th,tk,tl,tr,tt,uk,ur,uz,vi,yi,yo,zh".split(
@@ -635,11 +591,11 @@ def asr_factory(args, logfile=sys.stderr):
     tokenizer = None
 
     # Create the OnlineASRProcessor
-    # if args.vac:
-    #
-    #     online = VACOnlineASRProcessor(args.min_chunk_size, asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
-    # else:
-    online = OnlineASRProcessor(asr, tokenizer, logfile=logfile,
+    if args.vac:
+
+        online = VACOnlineASRProcessor(args.min_chunk_size, asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
+    else:
+        online = OnlineASRProcessor(asr, tokenizer, logfile=logfile,
                                 buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
 
     return asr, online

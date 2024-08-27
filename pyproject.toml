@@ -24,6 +24,9 @@ openai = "^1.42.0"
 numpy = "1.26.4"
 llvmlite ="0.43.0"
 numba ="0.60.0"
+torch = "2.0.1"
+certifi = "^2024.7.4"
+torchaudio = "2.0.2"
 
 
 
