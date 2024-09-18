@@ -89,8 +89,12 @@ Here are the latency results for different setups:
 Example of Transcription Output for WAV File:  
 When running whisper_online.py with a WAV file, the transcription output looks like this:   
  >15827.6072 0 6000 כשאנחנו נתקלים במצב שמעורר בנו חרדה, הגוף שלנו מיד מכין את עצמו לאימות.  
->47854.9259 6000 38000  הלב דופק חזק, אנחנו מזיעים, לפעמים מרגישים חולשה בגוף. קשה לנו להתרכז במשהו אחר. מבחינה פיזיולוגית, רמת החרדה לא נשארת קבועה, אלא עולה ויורדת כמו גל. חשוב לזכור את זה. בסוף, החרדה תמיד יורדת. >עם עזרה, אפשר להתמודד עם החרדה גם כשהיא עולה.  ‫תודה רבה.
-
+>47854.9259 6000 38000  הלב דופק חזק, אנחנו מזיעים, לפעמים מרגישים חולשה בגוף. קשה לנו להתרכז במשהו אחר. מבחינה פיזיולוגית, רמת החרדה לא נשארת קבועה, אלא עולה ויורדת כמו גל. חשוב לזכור את זה. בסוף, החרדה תמיד יורדת. עם עזרה, אפשר להתמודד עם החרדה גם כשהיא עולה.  ‫תודה רבה.
+>
+#### More example results can be found here:  
+- me-hebrew-stream.wav - out3.txt  
+- test_heberew.wav - out11.txt for longer audio  
+- have-a-nice-day.wav - out.txt for english audio testing  
 
 
 
