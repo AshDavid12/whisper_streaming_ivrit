@@ -16,6 +16,33 @@ The **main branch** provides a basic setup for streaming transcription using the
 
 The **ivrit branch** modifies the project to use the **ivrit-ai** model for Hebrew transcription. The model is deployed on **Runpod** via a Docker image, and the client-side is adjusted to interact with this model for real-time transcription.
 
+## Set Up
+### Setting Up Poetry 
+This project uses **Poetry** as a dependency manager. Poetry handles dependencies, virtual environments, and package building.
+
+Installing Project Dependencies
+After cloning the repository, you can install all required dependencies by running: 
+```bash
+poetry install
+```
+This will create a virtual environment and install all the dependencies listed in the `pyproject.toml` file.
+
+### Setting Up the Ivrit-ai Model on Runpod
+To deploy the ivrit-ai model for Hebrew transcription, follow these steps:  
+
+1. Log in to [runpod.io](https://www.runpod.io).
+2. From the menu, navigate to **Serverless**, then click **New Endpoint**.
+3. Select the desired worker configuration:
+   - You can choose the cheapest worker (16GB GPU, $0.00016/second as of August 1st, 2024).
+   - Active workers can be set to 0, and max workers to 1 or more.
+   - GPUs per worker should be set to 1.
+4. For the container image, select:
+```bash
+   yairlifshitz/faster-whisper-v2-d4:v1.0
+```
+5. Click Deploy
+
+
 ## Running the Project
 
 There are two ways to run this project, depending on whether you want to transcribe pre-recorded audio or live audio from a microphone:
@@ -67,5 +94,15 @@ When running whisper_online.py with a WAV file, the transcription output looks l
 
 
 
-### Setting Up the Ivrit-ai Model on Runpod
-check out the instructions in thre readme on following this link [Visit Google](https://github.com/ivrit-ai/runpod-serverless) 
+
+
+### Server-Side Modifications
+For server-side modifications that integrate Whisper online with the Hebrew transcription model, check out my project runpod-serverless-whisper here. It includes modifications to seamlessly integrate the ivrit-ai model with Whisper for real-time transcription.     
+
+## Links 
+
+- Whisper Streaming project: [whisper-streaming](https://github.com/ufal/whisper_streaming)  
+- Ivrit-ai Runpid serverless project: [ivrit-ai/runpod-serverless](https://github.com/ivrit-ai/runpod-serverless)   
+- Check out my project for server-side modification that integrate Whisper online with the Hebrew transcription model. It includes modifications to seamlessly integrate the ivrit-ai model with Whisper for real-time transcription:  [runpod-serverless-whisper](https://github.com/AshDavid12/runpod_serverless_whisper/tree/main)
+
+
