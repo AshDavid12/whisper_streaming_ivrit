@@ -6,13 +6,13 @@ This project enables real-time transcription of Hebrew audio files using the **i
 
 The project extends the original **Whisper streaming** capabilities to support Hebrew transcription through the ivrit-ai model. It can process both pre-recorded WAV files and live microphone input for transcription.
 
-## Branches
+### Branches
 
-### Main Branch
+#### Main Branch
 
 The **main branch** provides a basic setup for streaming transcription using the Whisper model.
 
-### Ivrit Branch
+#### Ivrit Branch
 
 The **ivrit branch** modifies the project to use the **ivrit-ai** model for Hebrew transcription. The model is deployed on **Runpod** via a Docker image, and the client-side is adjusted to interact with this model for real-time transcription.
 
@@ -84,7 +84,7 @@ Here are the latency results for different setups:
 >Latency per second with VAD: 1.676 seconds  
 
 
-## Results
+## Transcription Results
 
 Example of Transcription Output for WAV File:  
 When running whisper_online.py with a WAV file, the transcription output looks like this:   
